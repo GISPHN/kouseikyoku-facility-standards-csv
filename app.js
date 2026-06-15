@@ -322,6 +322,9 @@ function splitName(fullName) {
         return [form + rest.slice(0, suffixIndex + 1), rest.slice(suffixIndex + 1)];
       }
     }
+    if (form.includes("法人") && rest) {
+      return [form, rest];
+    }
     return ["", name];
   }
   return ["", name];
@@ -380,20 +383,30 @@ function normalizeAddressForQuery(prefecture, address) {
 }
 
 async function geocodeRows(rows, delayMs) {
-  const cache = new Map();
-  const queries = [];
+  const facilityQueries = new Map();
+  const queryResults = new Map();
 
   for (const row of rows) {
-    const query = normalizeAddressForQuery(row.prefecture || "大阪府", row.address);
-    if (query && !cache.has(query)) {
-      cache.set(query, null);
-      queries.push(query);
+    const facilityKey = [
+      row.medical_institution_no,
+      row.branch_no,
+      row.postal_code,
+      row.address,
+      row.full_name,
+    ].join("|");
+    if (!facilityQueries.has(facilityKey)) {
+      facilityQueries.set(facilityKey, normalizeAddressForQuery(row.prefecture || "大阪府", row.address));
     }
   }
 
-  for (let index = 0; index < queries.length; index += 1) {
-    const query = queries[index];
-    setStatus(`ジオコーディング中: ${index + 1} / ${queries.length}`, 55 + Math.round(((index + 1) / Math.max(queries.length, 1)) * 40));
+  const uniqueQueries = [...new Set([...facilityQueries.values()].filter(Boolean))];
+
+  for (let index = 0; index < uniqueQueries.length; index += 1) {
+    const query = uniqueQueries[index];
+    setStatus(
+      `ジオコーディング中: ${index + 1} / ${uniqueQueries.length} 医療機関住所`,
+      55 + Math.round(((index + 1) / Math.max(uniqueQueries.length, 1)) * 40),
+    );
     const url = `https://msearch.gsi.go.jp/address-search/AddressSearch?q=${encodeURIComponent(query)}`;
     let result = { geocode_source: "gsi-address-search:no-result" };
     try {
@@ -416,13 +429,24 @@ async function geocodeRows(rows, delayMs) {
     } catch (error) {
       result = { geocode_source: `gsi-address-search:error:${error.message}` };
     }
-    cache.set(query, result);
+    queryResults.set(query, result);
     if (delayMs > 0) await sleep(delayMs);
   }
 
+  const facilityResults = new Map();
+  for (const [facilityKey, query] of facilityQueries) {
+    facilityResults.set(facilityKey, queryResults.get(query) || {});
+  }
+
   for (const row of rows) {
-    const query = normalizeAddressForQuery(row.prefecture || "大阪府", row.address);
-    Object.assign(row, cache.get(query) || {});
+    const facilityKey = [
+      row.medical_institution_no,
+      row.branch_no,
+      row.postal_code,
+      row.address,
+      row.full_name,
+    ].join("|");
+    Object.assign(row, facilityResults.get(facilityKey) || {});
   }
 }
 
