@@ -16,11 +16,15 @@ const DATE_RE = /^((?:令和|平成|昭和)(?:元|\s*\d+)?年\s*\d{1,2}月\s*\d{
 const POSTAL_RE = /〒\s*([0-9０-９]{3})[－ー―‐-]\s*([0-9０-９]{4})/u;
 const PHONE_RE = /(\d{2,5}-\d{1,4}-\d{3,4})/u;
 const FAX_RE = /\((\d{2,5}-\d{1,4}-\d{3,4})\)/u;
+const PAREN_PHONE_RE = /(\d{2,5})\((\d{1,4})\)(\d{3,4})/u;
+const PAREN_FAX_RE = /\((\d{2,5})\((\d{1,4})\)(\d{3,4})\)/u;
 const NUMBER_RE = /^(\d+)\s+(\d{2}-\d{5})/u;
+const COMMA_NUMBER_RE = /^(\d+)\s+([0-9０-９]{2,3}[,，][0-9０-９]{3,4}[,，][0-9０-９])/u;
 const BRANCH_RE = /^\((\d{2}-\d{5})\s*\)/u;
-const BED_RE = /^(一般|療養|精神|結核|感染|その他|一般・療養|一般及び療養)[\s　]*(\d+)$/u;
-const BED_TYPE_RE = /^(一般|療養|精神|結核|感染|その他|一般・療養|一般及び療養)$/u;
-const INT_RE = /^\d+$/u;
+const COMMA_BRANCH_RE = /^\(([0-9０-９]{2,3}[,，][0-9０-９]{3,4}[,，][0-9０-９])\s*\)/u;
+const BED_RE = /^(一般(?:（感染）)?|療養|精神|結核|感染|その他|一般・療養|一般及び療養)[\s　]*([\d,，]+)$/u;
+const BED_TYPE_RE = /^(一般(?:（感染）)?|療養|精神|結核|感染|その他|一般・療養|一般及び療養)$/u;
+const COUNT_RE = /^[\d,，]+$/u;
 const PREF_RE = /届出受理医療機関名簿\[\s*([^\]\s]+)\s*\]/u;
 const PREF_FALLBACK_RE = /\[\s*([^\]\s]+府|[^\]\s]+県|[^\]\s]+都|[^\]\s]+道)\s*\]/u;
 const AS_OF_RE = /\[\s*(令和\s*\d+年\s*\d+月\s*\d+日)\s*現在/u;
@@ -101,6 +105,69 @@ function cleanLine(line) {
     .replace(/\u00a0/g, " ")
     .replace(/－/g, "-")
     .trim();
+}
+
+function toHalfWidthDigits(text) {
+  return String(text || "").replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0));
+}
+
+function normalizeMedicalInstitutionNo(value) {
+  const text = toHalfWidthDigits(value);
+  if (text.includes(",") || text.includes("，")) {
+    const digits = text.replace(/\D/g, "");
+    if (digits.length >= 7) return `${digits.slice(0, 2)}-${digits.slice(2, 7)}`;
+  }
+  return text;
+}
+
+function parseNumberLine(line) {
+  const standard = NUMBER_RE.exec(line);
+  if (standard) {
+    return {
+      item_no: standard[1],
+      medical_institution_no: normalizeMedicalInstitutionNo(standard[2]),
+    };
+  }
+  const comma = COMMA_NUMBER_RE.exec(line);
+  if (comma) {
+    return {
+      item_no: comma[1],
+      medical_institution_no: normalizeMedicalInstitutionNo(comma[2]),
+    };
+  }
+  return null;
+}
+
+function parseBranchLine(line) {
+  const standard = BRANCH_RE.exec(line);
+  if (standard) return normalizeMedicalInstitutionNo(standard[1]);
+  const comma = COMMA_BRANCH_RE.exec(line);
+  if (comma) return normalizeMedicalInstitutionNo(comma[1]);
+  return "";
+}
+
+function normalizeCount(value) {
+  return toHalfWidthDigits(value).replace(/[，,]/g, "");
+}
+
+function normalizePhoneParts(match) {
+  return `${match[1]}-${match[2]}-${match[3]}`;
+}
+
+function findPhone(line) {
+  const hyphen = PHONE_RE.exec(line);
+  if (hyphen) return { index: hyphen.index, value: hyphen[1] };
+  const paren = PAREN_PHONE_RE.exec(line);
+  if (paren && line[paren.index - 1] !== "(") return { index: paren.index, value: normalizePhoneParts(paren) };
+  return null;
+}
+
+function findFax(line) {
+  const hyphen = FAX_RE.exec(line);
+  if (hyphen) return hyphen[1];
+  const paren = PAREN_FAX_RE.exec(line);
+  if (paren) return normalizePhoneParts(paren);
+  return "";
 }
 
 function shouldSkip(line) {
@@ -185,6 +252,7 @@ async function parsePdf(arrayBuffer) {
   };
 
   for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
+    let pageHadRecordStart = false;
     setStatus(`PDF解析中: ${pageNo} / ${pdf.numPages} ページ`, Math.round((pageNo / pdf.numPages) * 55));
     const page = await pdf.getPage(pageNo);
     const content = await page.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false });
@@ -195,7 +263,10 @@ async function parsePdf(arrayBuffer) {
     const allItems = content.items.map((item) => item.str || "");
     const rawItems = content.items
       .filter((item) => (item.transform?.[4] ?? 0) >= 110)
-      .map((item) => item.str || "");
+      .map((item) => ({
+        text: item.str || "",
+        row: item.transform?.[4] ?? 0,
+      }));
     const pageText = allItems.join("");
 
     if (!sourceMeta.prefecture) {
@@ -211,21 +282,32 @@ async function parsePdf(arrayBuffer) {
       if (created) sourceMeta.created_date = normalizeSpaces(created[1]);
     }
 
-    const tokens = rawItems.flatMap(splitTokens);
-    for (const line of tokens) {
+    const tokens = rawItems.flatMap((item) => splitTokens(item.text).map((line) => ({ line, row: item.row })));
+    const firstPostalRow = tokens.find((token) => POSTAL_RE.test(token.line))?.row ?? Number.POSITIVE_INFINITY;
+    for (const token of tokens) {
+      const { line, row } = token;
       if (POSTAL_RE.test(line)) {
         if (record) finalizeCurrent();
         startRecord(line, pageNo);
+        pageHadRecordStart = true;
         continue;
       }
 
       if (CODE_RE.test(line)) {
+        if (!pageHadRecordStart && row < firstPostalRow) {
+          if (record && stage === "name") record.standards.push(parseCode(line));
+          continue;
+        }
         if (record && stage === "name") finalizeCurrent();
         pendingStandards.push(parseCode(line));
         continue;
       }
 
       if (DATE_RE.test(line)) {
+        if (!pageHadRecordStart && row < firstPostalRow) {
+          if (record && stage === "name" && record.standards.length > record.dates.length) record.dates.push(line);
+          continue;
+        }
         if (record && stage === "name") finalizeCurrent();
         if (pendingStandards.length > 0 && pendingDates.length < pendingStandards.length) {
           pendingDates.push(line);
@@ -236,13 +318,13 @@ async function parsePdf(arrayBuffer) {
       if (!record) continue;
 
       if (stage === "address") {
-        const phone = PHONE_RE.exec(line);
+        const phone = findPhone(line);
         if (phone) {
           const before = line.slice(0, phone.index).trim();
           if (before) record.address_lines.push(before);
-          record.phone = phone[1];
-          const fax = FAX_RE.exec(line);
-          if (fax) record.fax = fax[1];
+          record.phone = phone.value;
+          const fax = findFax(line);
+          if (fax) record.fax = fax;
           stage = "number";
         } else {
           record.address_lines.push(line);
@@ -251,41 +333,40 @@ async function parsePdf(arrayBuffer) {
       }
 
       if (stage === "number") {
-        const number = NUMBER_RE.exec(line);
+        const number = parseNumberLine(line);
         if (number) {
-          record.item_no = number[1];
-          record.medical_institution_no = number[2];
+          record.item_no = number.item_no;
+          record.medical_institution_no = number.medical_institution_no;
           stage = "name";
         } else {
-          const fax = FAX_RE.exec(line);
+          const fax = findFax(line);
           if (fax) {
-            record.fax = fax[1];
+            record.fax = fax;
             continue;
           }
-          const branch = BRANCH_RE.exec(line);
-          if (branch) record.branch_no = branch[1];
+          const branch = parseBranchLine(line);
+          if (branch) record.branch_no = branch;
         }
         continue;
       }
 
       if (stage === "name") {
         const branch = BRANCH_RE.exec(line);
-        if (branch && !record.branch_no) {
-          record.branch_no = branch[1];
+        const branchNo = parseBranchLine(line);
+        if (branchNo && !record.branch_no) {
+          record.branch_no = branchNo;
           continue;
         }
         const bed = BED_RE.exec(line.replace(/　/g, " "));
         if (bed) {
           record.bed_type = bed[1];
-          record.bed_count = bed[2];
-          finalizeCurrent();
+          record.bed_count = normalizeCount(bed[2]);
           continue;
         }
-        if (record.pending_bed_type && INT_RE.test(line)) {
+        if (record.pending_bed_type && COUNT_RE.test(line)) {
           record.bed_type = record.pending_bed_type;
-          record.bed_count = line;
+          record.bed_count = normalizeCount(line);
           delete record.pending_bed_type;
-          finalizeCurrent();
           continue;
         }
         if (BED_TYPE_RE.test(line)) {
