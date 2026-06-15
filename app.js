@@ -192,8 +192,11 @@ async function parsePdf(arrayBuffer) {
     // This specific MHLW/Kouseikyoku PDF is internally ordered by logical columns.
     // Using visual line reconstruction merges facility columns with notification columns,
     // so keep PDF.js text item order here.
-    const rawItems = content.items.map((item) => item.str || "");
-    const pageText = rawItems.join("");
+    const allItems = content.items.map((item) => item.str || "");
+    const rawItems = content.items
+      .filter((item) => (item.transform?.[4] ?? 0) >= 110)
+      .map((item) => item.str || "");
+    const pageText = allItems.join("");
 
     if (!sourceMeta.prefecture) {
       const pref = PREF_RE.exec(pageText) || PREF_FALLBACK_RE.exec(pageText);
@@ -254,6 +257,11 @@ async function parsePdf(arrayBuffer) {
           record.medical_institution_no = number[2];
           stage = "name";
         } else {
+          const fax = FAX_RE.exec(line);
+          if (fax) {
+            record.fax = fax[1];
+            continue;
+          }
           const branch = BRANCH_RE.exec(line);
           if (branch) record.branch_no = branch[1];
         }
