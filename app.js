@@ -19,7 +19,10 @@ const FAX_RE = /\((\d{2,5}-\d{1,4}-\d{3,4})\)/u;
 const NUMBER_RE = /^(\d+)\s+(\d{2}-\d{5})/u;
 const BRANCH_RE = /^\((\d{2}-\d{5})\s*\)/u;
 const BED_RE = /^(一般|療養|精神|結核|感染|その他|一般・療養|一般及び療養)[\s　]*(\d+)$/u;
+const BED_TYPE_RE = /^(一般|療養|精神|結核|感染|その他|一般・療養|一般及び療養)$/u;
+const INT_RE = /^\d+$/u;
 const PREF_RE = /届出受理医療機関名簿\[\s*([^\]\s]+)\s*\]/u;
+const PREF_FALLBACK_RE = /\[\s*([^\]\s]+府|[^\]\s]+県|[^\]\s]+都|[^\]\s]+道)\s*\]/u;
 const AS_OF_RE = /\[\s*(令和\s*\d+年\s*\d+月\s*\d+日)\s*現在/u;
 const CREATED_RE = /(令和\s*\d+年\s*\d+月\s*\d+日)\s*作成/u;
 
@@ -184,11 +187,16 @@ async function parsePdf(arrayBuffer) {
   for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
     setStatus(`PDF解析中: ${pageNo} / ${pdf.numPages} ページ`, Math.round((pageNo / pdf.numPages) * 55));
     const page = await pdf.getPage(pageNo);
-    const lines = await extractPageLines(page);
-    const pageText = lines.join("\n");
+    const content = await page.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false });
+
+    // This specific MHLW/Kouseikyoku PDF is internally ordered by logical columns.
+    // Using visual line reconstruction merges facility columns with notification columns,
+    // so keep PDF.js text item order here.
+    const rawItems = content.items.map((item) => item.str || "");
+    const pageText = rawItems.join("");
 
     if (!sourceMeta.prefecture) {
-      const pref = PREF_RE.exec(pageText);
+      const pref = PREF_RE.exec(pageText) || PREF_FALLBACK_RE.exec(pageText);
       if (pref) sourceMeta.prefecture = pref[1];
     }
     if (!sourceMeta.as_of_date) {
@@ -200,7 +208,7 @@ async function parsePdf(arrayBuffer) {
       if (created) sourceMeta.created_date = normalizeSpaces(created[1]);
     }
 
-    const tokens = lines.flatMap(splitTokens);
+    const tokens = rawItems.flatMap(splitTokens);
     for (const line of tokens) {
       if (POSTAL_RE.test(line)) {
         if (record) finalizeCurrent();
@@ -216,7 +224,9 @@ async function parsePdf(arrayBuffer) {
 
       if (DATE_RE.test(line)) {
         if (record && stage === "name") finalizeCurrent();
-        pendingDates.push(line);
+        if (pendingStandards.length > 0 && pendingDates.length < pendingStandards.length) {
+          pendingDates.push(line);
+        }
         continue;
       }
 
@@ -263,6 +273,21 @@ async function parsePdf(arrayBuffer) {
           finalizeCurrent();
           continue;
         }
+        if (record.pending_bed_type && INT_RE.test(line)) {
+          record.bed_type = record.pending_bed_type;
+          record.bed_count = line;
+          delete record.pending_bed_type;
+          finalizeCurrent();
+          continue;
+        }
+        if (BED_TYPE_RE.test(line)) {
+          record.pending_bed_type = line;
+          continue;
+        }
+        if (record.pending_bed_type) {
+          record.name_lines.push(record.pending_bed_type);
+          delete record.pending_bed_type;
+        }
         record.name_lines.push(line);
       }
     }
@@ -272,30 +297,6 @@ async function parsePdf(arrayBuffer) {
 
   finalizeCurrent();
   return { facility_count: facilities, rows };
-}
-
-async function extractPageLines(page) {
-  const content = await page.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false });
-  const groups = [];
-
-  for (const item of content.items) {
-    const text = item.str || "";
-    if (!text.trim()) continue;
-    const x = item.transform?.[4] ?? 0;
-    const y = item.transform?.[5] ?? 0;
-    let group = groups.find((candidate) => Math.abs(candidate.y - y) < 2.5);
-    if (!group) {
-      group = { y, items: [] };
-      groups.push(group);
-    }
-    group.items.push({ x, text });
-  }
-
-  return groups
-    .sort((a, b) => b.y - a.y)
-    .map((group) => group.items.sort((a, b) => a.x - b.x).map((item) => item.text).join(""))
-    .map(cleanLine)
-    .filter(Boolean);
 }
 
 function parseCode(line) {
@@ -315,7 +316,7 @@ function splitName(fullName) {
     if (["国立研究開発法人", "国立大学法人", "公立大学法人", "地方独立行政法人", "独立行政法人"].includes(form) && rest) {
       return [form, rest];
     }
-    for (const suffix of ["会", "財団", "社団"]) {
+    for (const suffix of ["会", "會", "財団", "社団"]) {
       const suffixIndex = rest.indexOf(suffix);
       if (suffixIndex > 0 && suffixIndex + 1 < rest.length) {
         return [form + rest.slice(0, suffixIndex + 1), rest.slice(suffixIndex + 1)];
