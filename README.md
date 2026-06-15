@@ -1,23 +1,27 @@
 # 施設基準PDF CSV変換Webアプリ
 
-厚生局が公開している「施設基準の届出受理状況」のPDFを、分析しやすいロング形式CSVに変換するWebアプリです。法人名と病院名を別列にし、住所を国土地理院の住所検索APIでジオコーディングして緯度・経度を付与できます。
+厚生局が公開している「施設基準の届出受理状況」のPDFを、ブラウザだけで分析用CSVに変換する静的Webアプリです。サーバー、Node.js、Python、ローカル環境構築は不要です。
 
 対象ページ: [近畿厚生局 施設基準の届出受理状況](https://kouseikyoku.mhlw.go.jp/kinki/gyomu/gyomu/hoken_kikan/shitei_jokyo_00004.html)
 
-## セットアップ
+## 使い方
 
-```bash
-python -m pip install -r requirements.txt
-npm start
+GitHub Pagesで公開したURLをブラウザで開き、PDFを選択してCSVを作成します。
+
+想定URL:
+
+```text
+https://gisphn.github.io/kouseikyoku-facility-standards-csv/
 ```
 
-ブラウザで `http://localhost:3000` を開き、PDFをアップロードします。
+GitHub Pagesを有効化していない場合は、リポジトリの `Settings > Pages` で `Deploy from a branch`、`main`、`/(root)` を選択してください。
 
-Pythonの実行ファイル名が `python` ではない環境では、環境変数で指定します。
+## 仕組み
 
-```bash
-PYTHON_BIN=python3 npm start
-```
+- PDFの読み取りはブラウザ内の PDF.js で実行します。
+- CSV生成もブラウザ内で完結します。
+- ジオコーディングを有効にした場合のみ、住所文字列を国土地理院の住所検索APIへ問い合わせます。
+- PDFファイル自体は外部サーバーへアップロードしません。
 
 ## CSVの形式
 
@@ -36,5 +40,5 @@ PYTHON_BIN=python3 npm start
 ## 注意
 
 - 国土地理院APIは住所文字列に対する候補検索です。CSVには候補名を `geocode_title` に入れているため、必要に応じて確認してください。
-- 大きなPDFを全件ジオコーディングすると数分以上かかります。待ち時間を調整する場合は `GEOCODE_DELAY_MS` を変更してください。
-- PDFのレイアウトが地方厚生局や公開月によって変わる場合は、`scripts/parse_pdf.py` の正規表現を調整してください。
+- 大きなPDFを全件ジオコーディングすると数分以上かかります。
+- PDFのレイアウトが地方厚生局や公開月によって変わる場合は、`app.js` の抽出ルールを調整してください。

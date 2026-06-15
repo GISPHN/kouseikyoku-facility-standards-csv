@@ -4,14 +4,14 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>施設基準PDF CSV変換</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <main class="app">
       <section class="panel">
         <div class="masthead">
           <div>
-            <p class="eyebrow">Kinki Kouseikyoku PDF to CSV</p>
+            <p class="eyebrow">Browser-only PDF to CSV</p>
             <h1>施設基準の届出受理状況をCSVへ変換</h1>
           </div>
           <a class="source-link" href="https://kouseikyoku.mhlw.go.jp/kinki/gyomu/gyomu/hoken_kikan/shitei_jokyo_00004.html" target="_blank" rel="noreferrer">公開元</a>
@@ -24,16 +24,23 @@
             <input id="pdfFile" name="pdf" type="file" accept="application/pdf,.pdf" required />
           </label>
 
-          <label class="switch">
-            <input id="geocode" name="geocode" type="checkbox" checked />
-            <span>国土地理院APIで緯度・経度を付与</span>
-          </label>
+          <div class="options">
+            <label class="switch">
+              <input id="geocode" name="geocode" type="checkbox" checked />
+              <span>国土地理院APIで緯度・経度を付与</span>
+            </label>
+            <label class="number-field">
+              <span>API間隔</span>
+              <input id="geocodeDelay" type="number" min="0" max="2000" step="50" value="120" />
+              <span>ms</span>
+            </label>
+          </div>
 
           <button id="submitButton" type="submit">CSVを作成</button>
         </form>
 
         <div id="status" class="status" role="status">待機中</div>
-        <progress id="progress" class="progress" hidden></progress>
+        <progress id="progress" class="progress" max="100" value="0" hidden></progress>
       </section>
 
       <section class="schema">
@@ -50,6 +57,6 @@
         </div>
       </section>
     </main>
-    <script src="/app.js"></script>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>
