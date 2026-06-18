@@ -150,6 +150,26 @@ function normalizeCount(value) {
   return toHalfWidthDigits(value).replace(/[，,]/g, "");
 }
 
+function addBed(record, type, count) {
+  const normalizedCount = normalizeCount(count);
+  if (!type || !normalizedCount) return;
+  record.beds ||= [];
+  if (!record.beds.some((bed) => bed.type === type && bed.count === normalizedCount)) {
+    record.beds.push({ type, count: normalizedCount });
+  }
+}
+
+function bedValues(record) {
+  const beds = record.beds || [];
+  const total = beds.reduce((sum, bed) => sum + (Number(bed.count) || 0), 0);
+  return {
+    bed_type: beds.map((bed) => bed.type).join(";"),
+    bed_count: beds.map((bed) => bed.count).join(";"),
+    bed_summary: beds.map((bed) => `${bed.type}:${bed.count}`).join(";"),
+    bed_total: beds.length ? String(total) : "",
+  };
+}
+
 function normalizePhoneParts(match) {
   return `${match[1]}-${match[2]}-${match[3]}`;
 }
@@ -243,6 +263,7 @@ async function parsePdf(arrayBuffer) {
       dates: pendingDates,
       address_lines: [],
       name_lines: [],
+      beds: [],
     };
     pendingStandards = [];
     pendingDates = [];
@@ -359,13 +380,11 @@ async function parsePdf(arrayBuffer) {
         }
         const bed = BED_RE.exec(line.replace(/　/g, " "));
         if (bed) {
-          record.bed_type = bed[1];
-          record.bed_count = normalizeCount(bed[2]);
+          addBed(record, bed[1], bed[2]);
           continue;
         }
         if (record.pending_bed_type && COUNT_RE.test(line)) {
-          record.bed_type = record.pending_bed_type;
-          record.bed_count = normalizeCount(line);
+          addBed(record, record.pending_bed_type, line);
           delete record.pending_bed_type;
           continue;
         }
@@ -424,6 +443,7 @@ function buildRows(record, sourceMeta) {
   const [corporationName, hospitalName] = splitName(fullName);
   const standards = record.standards?.length ? record.standards : [{ standard_code: "", acceptance_no: "" }];
   const dates = record.dates || [];
+  const beds = bedValues(record);
 
   return standards.map((standard, index) => {
     const startDate = dates[index] || "";
@@ -440,8 +460,7 @@ function buildRows(record, sourceMeta) {
       address: normalizeSpaces((record.address_lines || []).join("")),
       phone: record.phone || "",
       fax: record.fax || "",
-      bed_type: record.bed_type || "",
-      bed_count: record.bed_count || "",
+      ...beds,
       standard_code: standard.standard_code || "",
       acceptance_no: standard.acceptance_no || "",
       start_date_jp: startDate,
@@ -564,6 +583,8 @@ function toCsv(rows) {
     "fax",
     "bed_type",
     "bed_count",
+    "bed_summary",
+    "bed_total",
     "standard_code",
     "acceptance_no",
     "start_date_jp",
