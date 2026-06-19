@@ -1,34 +1,13 @@
-import * as pdfjsLib from "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.mjs";
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/pdf.worker.mjs";
+import * as XLSX from "https://cdn.jsdelivr.net/npm/xlsx@0.18.5/+esm";
 
 const form = document.querySelector("#convertForm");
 const fileInput = document.querySelector("#pdfFile");
 const fileName = document.querySelector("#fileName");
 const geocodeInput = document.querySelector("#geocode");
-const geocodeDelayInput = document.querySelector("#geocodeDelay");
 const statusBox = document.querySelector("#status");
 const progress = document.querySelector("#progress");
 const submitButton = document.querySelector("#submitButton");
-
-const CODE_RE = /^(（[^）]+）第[^\s〒]+?号)(.*)$/u;
-const DATE_RE = /^((?:令和|平成|昭和)(?:元|\s*\d+)?年\s*\d{1,2}月\s*\d{1,2}日)(.*)$/u;
-const POSTAL_RE = /〒\s*([0-9０-９]{3})[－ー―‐-]\s*([0-9０-９]{4})/u;
-const PHONE_RE = /(\d{2,5}-\d{1,4}-\d{3,4})/u;
-const FAX_RE = /\((\d{2,5}-\d{1,4}-\d{3,4})\)/u;
-const PAREN_PHONE_RE = /(\d{2,5})\((\d{1,4})\)(\d{3,4})/u;
-const PAREN_FAX_RE = /\((\d{2,5})\((\d{1,4})\)(\d{3,4})\)/u;
-const NUMBER_RE = /^(\d+)\s+(\d{2}-\d{5})/u;
-const COMMA_NUMBER_RE = /^(\d+)\s+([0-9０-９]{2,3}[,，][0-9０-９]{3,4}[,，][0-9０-９])/u;
-const BRANCH_RE = /^\((\d{2}-\d{5})\s*\)/u;
-const COMMA_BRANCH_RE = /^\(([0-9０-９]{2,3}[,，][0-9０-９]{3,4}[,，][0-9０-９])\s*\)/u;
-const BED_RE = /^(一般(?:（感染）)?|療養|精神|結核|感染|その他|一般・療養|一般及び療養)[\s　]*([\d,，]+)$/u;
-const BED_TYPE_RE = /^(一般(?:（感染）)?|療養|精神|結核|感染|その他|一般・療養|一般及び療養)$/u;
-const COUNT_RE = /^[\d,，]+$/u;
-const PREF_RE = /届出受理医療機関名簿\[\s*([^\]\s]+)\s*\]/u;
-const PREF_FALLBACK_RE = /\[\s*([^\]\s]+府|[^\]\s]+県|[^\]\s]+都|[^\]\s]+道)\s*\]/u;
-const AS_OF_RE = /\[\s*(令和\s*\d+年\s*\d+月\s*\d+日)\s*現在/u;
-const CREATED_RE = /(令和\s*\d+年\s*\d+月\s*\d+日)\s*作成/u;
+const GEOCODE_DELAY_MS = 500;
 
 const LEGAL_FORMS = [
   "国立研究開発法人",
@@ -51,9 +30,11 @@ const LEGAL_FORMS = [
   "有限会社",
 ];
 
+const BED_TYPES = ["一般", "療養", "精神", "結核", "感染"];
+
 fileInput.addEventListener("change", () => {
   const file = fileInput.files[0];
-  fileName.textContent = file ? file.name : "厚生局公開の届出受理医療機関名簿PDF";
+  fileName.textContent = file ? file.name : "厚生局公開の施設基準Excel";
 });
 
 form.addEventListener("submit", async (event) => {
@@ -66,18 +47,21 @@ form.addEventListener("submit", async (event) => {
   progress.value = 0;
 
   try {
-    setStatus("PDFを読み込んでいます。", 0);
+    if (!isExcelFile(file)) {
+      throw new Error("Excelファイル（.xlsx / .xlsm / .xls）を指定してください。");
+    }
+
+    setStatus("Excelを読み込んでいます。", 0);
     const buffer = await file.arrayBuffer();
-    const parsed = await parsePdf(buffer);
-    const rows = parsed.rows.map((row) => ({ ...row, source_file: file.name || "upload.pdf" }));
+    const parsed = parseExcel(buffer);
+    const rows = parsed.rows.map((row) => ({ ...row, source_file: file.name || "upload.xlsx" }));
 
     if (geocodeInput.checked) {
-      const delayMs = Math.max(0, Number(geocodeDelayInput.value || 120));
-      await geocodeRows(rows, delayMs);
+      await geocodeRows(rows, GEOCODE_DELAY_MS);
     }
 
     const csv = toCsv(rows);
-    downloadCsv(csv, file.name.replace(/\.pdf$/i, ".csv") || "kouseikyoku.csv");
+    downloadCsv(csv, file.name.replace(/\.(xlsx|xlsm|xls)$/i, ".csv") || "kouseikyoku.csv");
     setStatus(`${parsed.facility_count}医療機関、${rows.length}行のCSVを作成しました。`, 100);
   } catch (error) {
     setStatus(error.message || String(error), 0);
@@ -96,54 +80,99 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function normalizeSpaces(text) {
-  return String(text || "").replace(/[ 　]+/g, "　").replace(/^[ 　]+|[ 　]+$/g, "");
-}
-
-function cleanLine(line) {
-  return String(line || "")
-    .replace(/\u00a0/g, " ")
-    .replace(/－/g, "-")
-    .trim();
+function isExcelFile(file) {
+  return /\.(xlsx|xlsm|xls)$/i.test(file?.name || "") || /spreadsheet|excel/i.test(file?.type || "");
 }
 
 function toHalfWidthDigits(text) {
   return String(text || "").replace(/[０-９]/g, (char) => String.fromCharCode(char.charCodeAt(0) - 0xfee0));
 }
 
-function normalizeMedicalInstitutionNo(value) {
-  const text = toHalfWidthDigits(value);
-  if (text.includes(",") || text.includes("，")) {
-    const digits = text.replace(/\D/g, "");
-    if (digits.length >= 7) return `${digits.slice(0, 2)}-${digits.slice(2, 7)}`;
+function normalizeSpaces(text) {
+  return String(text || "")
+    .replace(/\u00a0/g, " ")
+    .replace(/[ \t\r\n　]+/g, "　")
+    .replace(/^[ 　]+|[ 　]+$/g, "");
+}
+
+function excelCellText(value) {
+  if (value === undefined || value === null) return "";
+  return normalizeSpaces(String(value).trim());
+}
+
+function findExcelHeaderIndex(rows) {
+  const index = rows.findIndex((row) => {
+    const cells = row.map(excelCellText);
+    return cells.includes("項番") && cells.includes("医療機関番号") && cells.includes("医療機関名称");
+  });
+  if (index < 0) {
+    throw new Error("Excelのヘッダー行を検出できませんでした。「項番」「医療機関番号」「医療機関名称」を含む行が必要です。");
   }
+  return index;
+}
+
+function headerMap(headers) {
+  const map = new Map();
+  headers.forEach((header, index) => {
+    const key = excelCellText(header);
+    if (key && !map.has(key)) map.set(key, index);
+  });
+  return map;
+}
+
+function valueByHeader(row, headers, name) {
+  const index = headers.get(name);
+  return index === undefined ? "" : excelCellText(row[index]);
+}
+
+function normalizeMedicalInstitutionNo(value) {
+  const text = excelCellText(value);
+  const digits = toHalfWidthDigits(text).replace(/\D/g, "");
+  if (digits.length === 7) return `${digits.slice(0, 2)}-${digits.slice(2)}`;
   return text;
 }
 
-function parseNumberLine(line) {
-  const standard = NUMBER_RE.exec(line);
-  if (standard) {
-    return {
-      item_no: standard[1],
-      medical_institution_no: normalizeMedicalInstitutionNo(standard[2]),
-    };
-  }
-  const comma = COMMA_NUMBER_RE.exec(line);
-  if (comma) {
-    return {
-      item_no: comma[1],
-      medical_institution_no: normalizeMedicalInstitutionNo(comma[2]),
-    };
-  }
-  return null;
+function normalizePostalCode(value) {
+  const digits = toHalfWidthDigits(value).replace(/\D/g, "");
+  if (digits.length === 7) return `${digits.slice(0, 3)}-${digits.slice(3)}`;
+  return excelCellText(value);
 }
 
-function parseBranchLine(line) {
-  const standard = BRANCH_RE.exec(line);
-  if (standard) return normalizeMedicalInstitutionNo(standard[1]);
-  const comma = COMMA_BRANCH_RE.exec(line);
-  if (comma) return normalizeMedicalInstitutionNo(comma[1]);
-  return "";
+function parseSourceMeta(text) {
+  const normalized = toHalfWidthDigits(text || "");
+  const asOf = /\[\s*((?:令和|平成|昭和)\s*(?:元|\d+)年\s*\d{1,2}月\s*\d{1,2}日)\s*現在/u.exec(normalized);
+  const created = /((?:令和|平成|昭和)\s*(?:元|\d+)年\s*\d{1,2}月\s*\d{1,2}日)\s*作成/u.exec(normalized);
+  return {
+    as_of_date: asOf ? normalizeSpaces(asOf[1]) : "",
+    created_date: created ? normalizeSpaces(created[1]) : "",
+  };
+}
+
+function splitName(fullName) {
+  const name = normalizeSpaces(fullName);
+  if (!name) return ["", ""];
+
+  const pieces = name.split(/[ 　]+/u).filter(Boolean);
+  if (pieces.length >= 2 && LEGAL_FORMS.some((form) => pieces[0].startsWith(form))) {
+    return [normalizeSpaces(pieces.slice(0, -1).join("　")), pieces.at(-1)];
+  }
+
+  const compact = name.replace(/[ 　]+/gu, "");
+  for (const form of LEGAL_FORMS) {
+    if (!compact.startsWith(form)) continue;
+    const rest = compact.slice(form.length);
+    if (!rest) return [compact, ""];
+    for (const suffix of ["会", "院", "財団", "社団"]) {
+      const index = rest.indexOf(suffix);
+      if (index > 0 && index + 1 < rest.length) {
+        return [form + rest.slice(0, index + 1), rest.slice(index + 1)];
+      }
+    }
+    if (form.includes("法人")) return [form, rest];
+    return ["", name];
+  }
+
+  return ["", name];
 }
 
 function normalizeCount(value) {
@@ -151,11 +180,12 @@ function normalizeCount(value) {
 }
 
 function addBed(record, type, count) {
+  const normalizedType = normalizeBedType(type);
   const normalizedCount = normalizeCount(count);
-  if (!type || !normalizedCount) return;
+  if (!normalizedType || !normalizedCount) return;
   record.beds ||= [];
-  if (!record.beds.some((bed) => bed.type === type && bed.count === normalizedCount)) {
-    record.beds.push({ type, count: normalizedCount });
+  if (!record.beds.some((bed) => bed.type === normalizedType && bed.count === normalizedCount)) {
+    record.beds.push({ type: normalizedType, count: normalizedCount });
   }
 }
 
@@ -170,324 +200,132 @@ function bedValues(record) {
   };
 }
 
-function normalizePhoneParts(match) {
-  return `${match[1]}-${match[2]}-${match[3]}`;
+function normalizeBedType(typeText) {
+  const text = normalizeSpaces(typeText)
+    .replace(/一般[（(]\s*感染\s*[）)]/gu, "感染")
+    .replace(/[ 　]+/gu, " ")
+    .trim();
+  if (!text) return "";
+  const parts = text.split(" ").filter(Boolean);
+  if (parts.includes("感染")) return "感染";
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    if (BED_TYPES.includes(parts[index])) return parts[index];
+  }
+  return text;
 }
 
-function findPhone(line) {
-  const hyphen = PHONE_RE.exec(line);
-  if (hyphen) return { index: hyphen.index, value: hyphen[1] };
-  const paren = PAREN_PHONE_RE.exec(line);
-  if (paren && line[paren.index - 1] !== "(") return { index: paren.index, value: normalizePhoneParts(paren) };
-  return null;
-}
+function parseBeds(value) {
+  const record = { beds: [] };
+  const text = excelCellText(value);
+  if (!text) return bedValues(record);
 
-function findFax(line) {
-  const hyphen = FAX_RE.exec(line);
-  if (hyphen) return hyphen[1];
-  const paren = PAREN_FAX_RE.exec(line);
-  if (paren) return normalizePhoneParts(paren);
-  return "";
-}
-
-function shouldSkip(line) {
-  return (
-    !line ||
-    line.startsWith("届出受理医療機関名簿") ||
-    line.startsWith("全医療機関出力") ||
-    line.startsWith("[ 令和") ||
-    line.startsWith("病床数") ||
-    line.startsWith("電話番号")
-  );
-}
-
-function splitTokens(rawLine) {
-  let line = cleanLine(rawLine);
-  if (shouldSkip(line)) return [];
-
-  const tokens = [];
-  while (line) {
-    const postal = POSTAL_RE.exec(line);
-    if (postal && postal.index > 0) {
-      tokens.push(...splitTokens(line.slice(0, postal.index)));
-      line = line.slice(postal.index);
-      continue;
-    }
-
-    const code = CODE_RE.exec(line);
-    if (code) {
-      tokens.push(code[1].trim());
-      line = code[2].trim();
-      continue;
-    }
-
-    const date = DATE_RE.exec(line);
-    if (date) {
-      tokens.push(date[1].replace(/\s+/g, " ").trim());
-      line = date[2].trim();
-      continue;
-    }
-
-    tokens.push(line);
-    break;
+  for (const part of text.split(/[／/]/u)) {
+    const normalized = toHalfWidthDigits(part).replace(/[ 　]+/gu, " ").trim();
+    const match = /^(.+?)\s*([0-9][0-9,]*)$/u.exec(normalized);
+    if (match) addBed(record, match[1], match[2]);
   }
 
-  return tokens.filter(Boolean);
+  return bedValues(record);
 }
 
-async function parsePdf(arrayBuffer) {
-  const pdf = await pdfjsLib.getDocument({ data: arrayBuffer }).promise;
-  const rows = [];
-  let facilities = 0;
-  const sourceMeta = { prefecture: "", as_of_date: "", created_date: "" };
-  let pendingStandards = [];
-  let pendingDates = [];
-  let record = null;
-  let stage = "scan";
+function eraToYear(era, yearText) {
+  const normalizedYear = toHalfWidthDigits(yearText).trim();
+  const year = normalizedYear === "元" ? 1 : Number(normalizedYear);
+  return { 令和: 2018, 平成: 1988, 昭和: 1925 }[era] + year;
+}
 
-  const finalizeCurrent = () => {
-    if (record && record.name_lines?.length) {
-      rows.push(...buildRows(record, sourceMeta));
-      facilities += 1;
-    }
-    record = null;
-    stage = "scan";
+function dateToIso(dateText) {
+  const normalized = toHalfWidthDigits(dateText || "").replace(/\s+/g, "");
+  const match = /(令和|平成|昭和)(元|\d+)年(\d{1,2})月(\d{1,2})日/u.exec(normalized);
+  if (!match) return "";
+  return `${eraToYear(match[1], match[2])}-${String(Number(match[3])).padStart(2, "0")}-${String(Number(match[4])).padStart(2, "0")}`;
+}
+
+function dateToParts(dateText) {
+  const iso = dateToIso(dateText);
+  if (!iso) return { start_year: "", start_month: "", start_day: "" };
+  const [year, month, day] = iso.split("-");
+  return {
+    start_year: year,
+    start_month: String(Number(month)),
+    start_day: String(Number(day)),
   };
-
-  const startRecord = (postalLine, pageNo) => {
-    const postal = POSTAL_RE.exec(postalLine);
-    record = {
-      page: pageNo,
-      postal_code: postal ? `${postal[1]}-${postal[2]}` : "",
-      standards: pendingStandards,
-      dates: pendingDates,
-      address_lines: [],
-      name_lines: [],
-      beds: [],
-    };
-    pendingStandards = [];
-    pendingDates = [];
-    const rest = postal ? postalLine.slice(postal.index + postal[0].length).trim() : "";
-    if (rest) record.address_lines.push(rest);
-    stage = "address";
-  };
-
-  for (let pageNo = 1; pageNo <= pdf.numPages; pageNo += 1) {
-    let pageHadRecordStart = false;
-    setStatus(`PDF解析中: ${pageNo} / ${pdf.numPages} ページ`, Math.round((pageNo / pdf.numPages) * 55));
-    const page = await pdf.getPage(pageNo);
-    const content = await page.getTextContent({ normalizeWhitespace: false, disableCombineTextItems: false });
-
-    // This specific MHLW/Kouseikyoku PDF is internally ordered by logical columns.
-    // Using visual line reconstruction merges facility columns with notification columns,
-    // so keep PDF.js text item order here.
-    const allItems = content.items.map((item) => item.str || "");
-    const rawItems = content.items
-      .filter((item) => (item.transform?.[4] ?? 0) >= 110)
-      .map((item) => ({
-        text: item.str || "",
-        row: item.transform?.[4] ?? 0,
-      }));
-    const pageText = allItems.join("");
-
-    if (!sourceMeta.prefecture) {
-      const pref = PREF_RE.exec(pageText) || PREF_FALLBACK_RE.exec(pageText);
-      if (pref) sourceMeta.prefecture = pref[1];
-    }
-    if (!sourceMeta.as_of_date) {
-      const asOf = AS_OF_RE.exec(pageText);
-      if (asOf) sourceMeta.as_of_date = normalizeSpaces(asOf[1]);
-    }
-    if (!sourceMeta.created_date) {
-      const created = CREATED_RE.exec(pageText);
-      if (created) sourceMeta.created_date = normalizeSpaces(created[1]);
-    }
-
-    const tokens = rawItems.flatMap((item) => splitTokens(item.text).map((line) => ({ line, row: item.row })));
-    const firstPostalRow = tokens.find((token) => POSTAL_RE.test(token.line))?.row ?? Number.POSITIVE_INFINITY;
-    for (const token of tokens) {
-      const { line, row } = token;
-      if (POSTAL_RE.test(line)) {
-        if (record) finalizeCurrent();
-        startRecord(line, pageNo);
-        pageHadRecordStart = true;
-        continue;
-      }
-
-      if (CODE_RE.test(line)) {
-        if (!pageHadRecordStart && row < firstPostalRow) {
-          if (record && stage === "name") record.standards.push(parseCode(line));
-          continue;
-        }
-        if (record && stage === "name") finalizeCurrent();
-        pendingStandards.push(parseCode(line));
-        continue;
-      }
-
-      if (DATE_RE.test(line)) {
-        if (!pageHadRecordStart && row < firstPostalRow) {
-          if (record && stage === "name" && record.standards.length > record.dates.length) record.dates.push(line);
-          continue;
-        }
-        if (record && stage === "name") finalizeCurrent();
-        if (pendingStandards.length > 0 && pendingDates.length < pendingStandards.length) {
-          pendingDates.push(line);
-        }
-        continue;
-      }
-
-      if (!record) continue;
-
-      if (stage === "address") {
-        const phone = findPhone(line);
-        if (phone) {
-          const before = line.slice(0, phone.index).trim();
-          if (before) record.address_lines.push(before);
-          record.phone = phone.value;
-          const fax = findFax(line);
-          if (fax) record.fax = fax;
-          stage = "number";
-        } else {
-          record.address_lines.push(line);
-        }
-        continue;
-      }
-
-      if (stage === "number") {
-        const number = parseNumberLine(line);
-        if (number) {
-          record.item_no = number.item_no;
-          record.medical_institution_no = number.medical_institution_no;
-          stage = "name";
-        } else {
-          const fax = findFax(line);
-          if (fax) {
-            record.fax = fax;
-            continue;
-          }
-          const branch = parseBranchLine(line);
-          if (branch) record.branch_no = branch;
-        }
-        continue;
-      }
-
-      if (stage === "name") {
-        const branch = BRANCH_RE.exec(line);
-        const branchNo = parseBranchLine(line);
-        if (branchNo && !record.branch_no) {
-          record.branch_no = branchNo;
-          continue;
-        }
-        const bed = BED_RE.exec(line.replace(/　/g, " "));
-        if (bed) {
-          addBed(record, bed[1], bed[2]);
-          continue;
-        }
-        if (record.pending_bed_type && COUNT_RE.test(line)) {
-          addBed(record, record.pending_bed_type, line);
-          delete record.pending_bed_type;
-          continue;
-        }
-        if (BED_TYPE_RE.test(line)) {
-          record.pending_bed_type = line;
-          continue;
-        }
-        if (record.pending_bed_type) {
-          record.name_lines.push(record.pending_bed_type);
-          delete record.pending_bed_type;
-        }
-        record.name_lines.push(line);
-      }
-    }
-
-    await new Promise((resolve) => requestAnimationFrame(resolve));
-  }
-
-  finalizeCurrent();
-  return { facility_count: facilities, rows };
 }
 
-function parseCode(line) {
-  const match = /^（([^）]+)）第(.+?)号$/u.exec(line);
-  if (!match) return { standard_code: line, acceptance_no: "" };
-  return { standard_code: match[1], acceptance_no: match[2] };
-}
+function parseExcel(arrayBuffer) {
+  const workbook = XLSX.read(arrayBuffer, { type: "array", cellDates: false });
+  const sheetName = workbook.SheetNames[0];
+  if (!sheetName) throw new Error("Excelにシートがありません。");
 
-function splitName(fullName) {
-  const name = normalizeSpaces(fullName);
-  const compact = name.replace(/　/g, "");
-  for (const form of LEGAL_FORMS) {
-    if (!compact.startsWith(form)) continue;
-    const pieces = name.split(/[ 　]+/u).filter(Boolean);
-    if (pieces.length >= 2) return [normalizeSpaces(pieces.slice(0, -1).join("　")), pieces.at(-1)];
-    const rest = compact.slice(form.length);
-    if (["国立研究開発法人", "国立大学法人", "公立大学法人", "地方独立行政法人", "独立行政法人"].includes(form) && rest) {
-      return [form, rest];
-    }
-    for (const suffix of ["会", "會", "財団", "社団"]) {
-      const suffixIndex = rest.indexOf(suffix);
-      if (suffixIndex > 0 && suffixIndex + 1 < rest.length) {
-        return [form + rest.slice(0, suffixIndex + 1), rest.slice(suffixIndex + 1)];
-      }
-    }
-    if (form.includes("法人") && rest) {
-      return [form, rest];
-    }
-    return ["", name];
-  }
-  return ["", name];
-}
+  const sheet = workbook.Sheets[sheetName];
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: "", raw: false });
+  const headerIndex = findExcelHeaderIndex(rows);
+  const headers = headerMap(rows[headerIndex]);
+  const sourceMetaText = rows.slice(0, headerIndex).flat().map(excelCellText).find(Boolean) || "";
+  const sourceMeta = parseSourceMeta(sourceMetaText);
+  const outputRows = [];
+  const facilityKeys = new Set();
 
-function buildRows(record, sourceMeta) {
-  const fullName = normalizeSpaces((record.name_lines || []).join(""));
-  const [corporationName, hospitalName] = splitName(fullName);
-  const standards = record.standards?.length ? record.standards : [{ standard_code: "", acceptance_no: "" }];
-  const dates = record.dates || [];
-  const beds = bedValues(record);
+  for (const row of rows.slice(headerIndex + 1)) {
+    if (!row.some((value) => excelCellText(value))) continue;
 
-  return standards.map((standard, index) => {
-    const startDate = dates[index] || "";
-    return {
-      ...sourceMeta,
-      page: record.page || "",
-      item_no: record.item_no || "",
-      medical_institution_no: record.medical_institution_no || "",
-      branch_no: record.branch_no || "",
+    const fullName = valueByHeader(row, headers, "医療機関名称");
+    const address = valueByHeader(row, headers, "医療機関所在地（住所）");
+    const medicalInstitutionNo = normalizeMedicalInstitutionNo(valueByHeader(row, headers, "医療機関番号"));
+    if (!fullName && !address && !medicalInstitutionNo) continue;
+
+    const branchNo = normalizeMedicalInstitutionNo(valueByHeader(row, headers, "併設医療機関番号"));
+    const [corporationName, hospitalName] = splitName(fullName);
+    const startDate = valueByHeader(row, headers, "算定開始年月日");
+    const rowObject = {
+      prefecture_code: valueByHeader(row, headers, "都道府県コード"),
+      prefecture: valueByHeader(row, headers, "都道府県名"),
+      category: valueByHeader(row, headers, "区分"),
+      as_of_date: sourceMeta.as_of_date,
+      created_date: sourceMeta.created_date,
+      item_no: valueByHeader(row, headers, "項番"),
+      medical_institution_no: medicalInstitutionNo,
+      branch_no: branchNo,
+      medical_institution_symbol_no: valueByHeader(row, headers, "医療機関記号番号"),
       corporation_name: corporationName,
       hospital_name: hospitalName,
       full_name: fullName,
-      postal_code: record.postal_code || "",
-      address: normalizeSpaces((record.address_lines || []).join("")),
-      phone: record.phone || "",
-      fax: record.fax || "",
-      ...beds,
-      standard_code: standard.standard_code || "",
-      acceptance_no: standard.acceptance_no || "",
+      postal_code: normalizePostalCode(valueByHeader(row, headers, "医療機関所在地（郵便番号）")),
+      address,
+      phone: valueByHeader(row, headers, "電話番号"),
+      fax: valueByHeader(row, headers, "FAX番号"),
+      ...parseBeds(valueByHeader(row, headers, "病床数")),
+      standard_name: valueByHeader(row, headers, "受理届出名称"),
+      standard_code: valueByHeader(row, headers, "受理記号"),
+      acceptance_no: valueByHeader(row, headers, "受理番号"),
       start_date_jp: startDate,
       start_date_iso: dateToIso(startDate),
+      ...dateToParts(startDate),
+      individual_valid_start_date_jp: valueByHeader(row, headers, "個別有効開始年月日"),
+      individual_valid_start_date_iso: dateToIso(valueByHeader(row, headers, "個別有効開始年月日")),
+      remarks_heading: valueByHeader(row, headers, "備考（見出し）"),
+      remarks_data: valueByHeader(row, headers, "備考（データ）"),
+      municipality_code: valueByHeader(row, headers, "市町村コード"),
+      municipality_name: valueByHeader(row, headers, "市町村名"),
+      type_code: valueByHeader(row, headers, "種別コード"),
+      type: valueByHeader(row, headers, "種別"),
       latitude: "",
       longitude: "",
       geocode_title: "",
       geocode_source: "",
     };
-  });
-}
 
-function eraToYear(era, yearText) {
-  const year = yearText.trim() === "元" ? 1 : Number(yearText);
-  return { 令和: 2018, 平成: 1988, 昭和: 1925 }[era] + year;
-}
+    outputRows.push(rowObject);
+    facilityKeys.add([medicalInstitutionNo, branchNo, rowObject.postal_code, address, fullName].join("|"));
+  }
 
-function dateToIso(dateText) {
-  const match = /(令和|平成|昭和)\s*(元|\d+)年\s*(\d+)月\s*(\d+)日/u.exec(dateText || "");
-  if (!match) return "";
-  return `${eraToYear(match[1], match[2])}-${String(Number(match[3])).padStart(2, "0")}-${String(Number(match[4])).padStart(2, "0")}`;
+  return { rows: outputRows, facility_count: facilityKeys.size };
 }
 
 function normalizeAddressForQuery(prefecture, address) {
-  const text = String(address || "").replace(/[ 　]+/g, "").replace(/[－―‐]/g, "-").trim();
+  const text = String(address || "").replace(/[ 　]+/g, "").replace(/[－ー―]/g, "-").trim();
   if (!text) return "";
-  return text.startsWith(prefecture) ? text : `${prefecture || "大阪府"}${text}`;
+  return text.startsWith(prefecture) ? text : `${prefecture || ""}${text}`;
 }
 
 async function geocodeRows(rows, delayMs) {
@@ -503,7 +341,7 @@ async function geocodeRows(rows, delayMs) {
       row.full_name,
     ].join("|");
     if (!facilityQueries.has(facilityKey)) {
-      facilityQueries.set(facilityKey, normalizeAddressForQuery(row.prefecture || "大阪府", row.address));
+      facilityQueries.set(facilityKey, normalizeAddressForQuery(row.prefecture, row.address));
     }
   }
 
@@ -567,13 +405,15 @@ function csvEscape(value) {
 function toCsv(rows) {
   const columns = [
     "source_file",
+    "prefecture_code",
     "prefecture",
+    "category",
     "as_of_date",
     "created_date",
-    "page",
     "item_no",
     "medical_institution_no",
     "branch_no",
+    "medical_institution_symbol_no",
     "corporation_name",
     "hospital_name",
     "full_name",
@@ -585,10 +425,22 @@ function toCsv(rows) {
     "bed_count",
     "bed_summary",
     "bed_total",
+    "standard_name",
     "standard_code",
     "acceptance_no",
     "start_date_jp",
     "start_date_iso",
+    "start_year",
+    "start_month",
+    "start_day",
+    "individual_valid_start_date_jp",
+    "individual_valid_start_date_iso",
+    "remarks_heading",
+    "remarks_data",
+    "municipality_code",
+    "municipality_name",
+    "type_code",
+    "type",
     "latitude",
     "longitude",
     "geocode_title",
