@@ -163,7 +163,8 @@ button:disabled {
   accent-color: var(--accent);
 }
 
-.schema {
+.schema,
+.citation {
   margin-top: 24px;
   padding: 0 4px;
 }
@@ -183,6 +184,29 @@ button:disabled {
   font-size: 0.92rem;
 }
 
+.citation {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 16px;
+  align-items: start;
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+
+.citation p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.secondary-button {
+  min-width: 140px;
+  background: var(--surface);
+  color: var(--accent-strong);
+  border: 1px solid var(--line);
+}
+
 @media (max-width: 640px) {
   .app {
     width: min(100% - 20px, 980px);
@@ -199,5 +223,9 @@ button:disabled {
 
   button {
     width: 100%;
+  }
+
+  .citation {
+    grid-template-columns: 1fr;
   }
 }
