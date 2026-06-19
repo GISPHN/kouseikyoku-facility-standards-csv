@@ -58,7 +58,39 @@
           <span>経度</span>
         </div>
       </section>
+
+      <section class="citation">
+        <div>
+          <h2>Citation</h2>
+          <p id="citationText">Horiike R. Kouseikyoku Facility Standards CSV Converter [Software]. GitHub; 2026. Available from: https://github.com/GISPHN/kouseikyoku-facility-standards-csv</p>
+        </div>
+        <button id="copyCitation" class="secondary-button" type="button">Copy citation</button>
+      </section>
     </main>
     <script type="module" src="./app.js"></script>
+    <script>
+      const copyCitationButton = document.querySelector("#copyCitation");
+      const citationText = document.querySelector("#citationText");
+      copyCitationButton?.addEventListener("click", async () => {
+        const citation = citationText?.textContent?.trim() || "";
+        if (!citation) return;
+        try {
+          await navigator.clipboard.writeText(citation);
+        } catch {
+          const textarea = document.createElement("textarea");
+          textarea.value = citation;
+          textarea.style.position = "fixed";
+          textarea.style.opacity = "0";
+          document.body.appendChild(textarea);
+          textarea.select();
+          document.execCommand("copy");
+          textarea.remove();
+        }
+        copyCitationButton.textContent = "Copied";
+        setTimeout(() => {
+          copyCitationButton.textContent = "Copy citation";
+        }, 1800);
+      });
+    </script>
   </body>
 </html>
