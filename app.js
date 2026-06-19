@@ -295,9 +295,18 @@ function parseExcel(arrayBuffer) {
 }
 
 function normalizeAddressForQuery(prefecture, address) {
-  const normalized = text(address).replace(/[ 　]+/g, "").replace(/[－ー―]/g, "-");
+  const normalized = stripAddressDetailForQuery(text(address).replace(/[ 　]+/g, "").replace(/[－ー―]/g, "-"));
   if (!normalized) return "";
   return normalized.startsWith(prefecture) ? normalized : `${prefecture || ""}${normalized}`;
+}
+
+function stripAddressDetailForQuery(address) {
+  let value = address;
+  const floorPattern = "(?:地下|B|Ｂ)?[0-9０-９一二三四五六七八九十]+(?:階|[FfＦｆ]|フロア)";
+  const markerPattern = new RegExp(`^(.+[0-9０-９一二三四五六七八九十]+(?:丁目|丁|番地?|番|号|地先|-[0-9０-９]+)).*${floorPattern}.*$`, "u");
+  const markerMatch = markerPattern.exec(value);
+  if (markerMatch?.[1]) value = markerMatch[1];
+  return value.replace(new RegExp(`${floorPattern}.*$`, "u"), "");
 }
 
 async function geocodeRows(rows) {
