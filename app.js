@@ -4,6 +4,7 @@ const form = document.querySelector("#convertForm");
 const fileInput = document.querySelector("#pdfFile");
 const fileName = document.querySelector("#fileName");
 const geocodeInput = document.querySelector("#geocode");
+const wideOutputInput = document.querySelector("#wideOutput");
 const statusBox = document.querySelector("#status");
 const progress = document.querySelector("#progress");
 const submitButton = document.querySelector("#submitButton");
@@ -30,7 +31,8 @@ const LEGAL_FORMS = [
   "有限会社",
 ];
 
-const BED_TYPES = ["一般", "療養", "精神", "結核", "感染"];
+const BED_TYPES = ["一般", "一般（感染）", "療養", "精神", "結核"];
+const BED_COLUMNS = ["一般", "一般（感染）", "療養", "精神", "結核"];
 
 fileInput.addEventListener("change", () => {
   const file = fileInput.files[0];
@@ -60,8 +62,16 @@ form.addEventListener("submit", async (event) => {
       await geocodeRows(rows, GEOCODE_DELAY_MS);
     }
 
-    const csv = toCsv(rows);
-    downloadCsv(csv, file.name.replace(/\.(xlsx|xlsm|xls)$/i, ".csv") || "kouseikyoku.csv");
+    const baseName = file.name.replace(/\.(xlsx|xlsm|xls)$/i, "") || "kouseikyoku";
+    const csv = toCsv(rows, LONG_COLUMNS);
+    downloadCsv(csv, `${baseName}.csv`);
+
+    if (wideOutputInput?.checked) {
+      const wide = buildWideRows(rows);
+      const wideCsv = toCsv(wide.rows, [...FACILITY_COLUMNS, ...wide.standardNames]);
+      downloadCsv(wideCsv, `${baseName}_wide.csv`);
+    }
+
     setStatus(`${parsed.facility_count}医療機関、${rows.length}行のCSVを作成しました。`, 100);
   } catch (error) {
     setStatus(error.message || String(error), 0);
@@ -123,8 +133,7 @@ function headerMap(headers) {
 function valueByHeader(row, headers, name) {
   const index = headers.get(name);
   return index === undefined ? "" : excelCellText(row[index]);
-}
-
+}\n
 function normalizeMedicalInstitutionNo(value) {
   const text = excelCellText(value);
   const digits = toHalfWidthDigits(text).replace(/\D/g, "");
@@ -192,22 +201,24 @@ function addBed(record, type, count) {
 function bedValues(record) {
   const beds = record.beds || [];
   const total = beds.reduce((sum, bed) => sum + (Number(bed.count) || 0), 0);
-  return {
-    bed_type: beds.map((bed) => bed.type).join(";"),
-    bed_count: beds.map((bed) => bed.count).join(";"),
-    bed_summary: beds.map((bed) => `${bed.type}:${bed.count}`).join(";"),
-    bed_total: beds.length ? String(total) : "",
-  };
+  const values = Object.fromEntries(BED_COLUMNS.map((column) => [column, ""]));
+  for (const bed of beds) {
+    if (!BED_COLUMNS.includes(bed.type)) continue;
+    const previous = Number(values[bed.type]) || 0;
+    values[bed.type] = String(previous + (Number(bed.count) || 0));
+  }
+  values.bed_total = beds.length ? String(total) : "";
+  return values;
 }
 
 function normalizeBedType(typeText) {
   const text = normalizeSpaces(typeText)
-    .replace(/一般[（(]\s*感染\s*[）)]/gu, "感染")
+    .replace(/一般[（(]\s*感染\s*[）)]/gu, "一般（感染）")
     .replace(/[ 　]+/gu, " ")
     .trim();
   if (!text) return "";
   const parts = text.split(" ").filter(Boolean);
-  if (parts.includes("感染")) return "感染";
+  if (parts.includes("感染") || parts.includes("一般（感染）")) return "一般（感染）";
   for (let index = parts.length - 1; index >= 0; index -= 1) {
     if (BED_TYPES.includes(parts[index])) return parts[index];
   }
@@ -402,51 +413,125 @@ function csvEscape(value) {
   return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
 }
 
-function toCsv(rows) {
-  const columns = [
-    "source_file",
-    "prefecture_code",
-    "prefecture",
-    "category",
-    "as_of_date",
-    "created_date",
-    "item_no",
-    "medical_institution_no",
-    "branch_no",
-    "medical_institution_symbol_no",
-    "corporation_name",
-    "hospital_name",
-    "full_name",
-    "postal_code",
-    "address",
-    "phone",
-    "fax",
-    "bed_type",
-    "bed_count",
-    "bed_summary",
-    "bed_total",
-    "standard_name",
-    "standard_code",
-    "acceptance_no",
-    "start_date_jp",
-    "start_date_iso",
-    "start_year",
-    "start_month",
-    "start_day",
-    "individual_valid_start_date_jp",
-    "individual_valid_start_date_iso",
-    "remarks_heading",
-    "remarks_data",
-    "municipality_code",
-    "municipality_name",
-    "type_code",
-    "type",
-    "latitude",
-    "longitude",
-    "geocode_title",
-    "geocode_source",
-  ];
+const LONG_COLUMNS = [
+  "source_file",
+  "prefecture_code",
+  "prefecture",
+  "category",
+  "as_of_date",
+  "created_date",
+  "item_no",
+  "medical_institution_no",
+  "branch_no",
+  "medical_institution_symbol_no",
+  "corporation_name",
+  "hospital_name",
+  "full_name",
+  "postal_code",
+  "address",
+  "phone",
+  "fax",
+  ...BED_COLUMNS,
+  "bed_total",
+  "standard_name",
+  "standard_code",
+  "acceptance_no",
+  "start_date_jp",
+  "start_date_iso",
+  "start_year",
+  "start_month",
+  "start_day",
+  "individual_valid_start_date_jp",
+  "individual_valid_start_date_iso",
+  "remarks_heading",
+  "remarks_data",
+  "municipality_code",
+  "municipality_name",
+  "type_code",
+  "type",
+  "latitude",
+  "longitude",
+  "geocode_title",
+  "geocode_source",
+];
+
+const FACILITY_COLUMNS = [
+  "source_file",
+  "prefecture_code",
+  "prefecture",
+  "category",
+  "as_of_date",
+  "created_date",
+  "item_no",
+  "medical_institution_no",
+  "branch_no",
+  "medical_institution_symbol_no",
+  "corporation_name",
+  "hospital_name",
+  "full_name",
+  "postal_code",
+  "address",
+  "phone",
+  "fax",
+  ...BED_COLUMNS,
+  "bed_total",
+  "individual_valid_start_date_jp",
+  "individual_valid_start_date_iso",
+  "remarks_heading",
+  "remarks_data",
+  "municipality_code",
+  "municipality_name",
+  "type_code",
+  "type",
+  "latitude",
+  "longitude",
+  "geocode_title",
+  "geocode_source",
+];
+
+function usedColumns(rows, columns) {
+  if (!rows.length) return columns;
+  return columns.filter((column) => rows.some((row) => String(row[column] ?? "").trim() !== ""));
+}
+
+function toCsv(rows, candidateColumns) {
+  const columns = usedColumns(rows, candidateColumns);
   return "\uFEFF" + [columns.join(","), ...rows.map((row) => columns.map((column) => csvEscape(row[column])).join(","))].join("\r\n");
+}
+
+function facilityKey(row) {
+  return [
+    row.medical_institution_no,
+    row.branch_no,
+    row.postal_code,
+    row.address,
+    row.full_name,
+  ].join("|");
+}
+
+function buildWideRows(rows) {
+  const facilityMap = new Map();
+  const standardNames = [];
+  const standardSet = new Set();
+
+  for (const row of rows) {
+    const key = facilityKey(row);
+    if (!facilityMap.has(key)) {
+      const facility = {};
+      for (const column of FACILITY_COLUMNS) facility[column] = row[column] || "";
+      facilityMap.set(key, facility);
+    }
+
+    const standardName = row.standard_name || "";
+    if (!standardName) continue;
+    if (!standardSet.has(standardName)) {
+      standardSet.add(standardName);
+      standardNames.push(standardName);
+    }
+    facilityMap.get(key)[standardName] = standardName;
+  }
+
+  return { rows: [...facilityMap.values()], standardNames };
 }
 
 function downloadCsv(csv, filename) {
