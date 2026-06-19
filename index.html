@@ -18,6 +18,9 @@
         </div>
 
         <form id="convertForm" class="uploader">
+          <p class="help-text">投入するExcelは、各厚生支局の「施設基準の届出受理状況（全体）（届出受理医療機関名簿）」のExcelファイルを使用してください。</p>
+          <p class="help-text">ジオコーディング結果は住所検索による候補位置です。施設の入口や建物中心など、ピンポイントの位置を保証するものではありません。</p>
+
           <label class="dropzone" for="pdfFile">
             <span class="drop-title">Excelを選択</span>
             <span id="fileName" class="drop-subtitle">厚生局公開の施設基準Excel</span>
@@ -27,6 +30,11 @@
           <label class="switch">
             <input id="geocode" name="geocode" type="checkbox" checked />
             <span>国土地理院APIで緯度・経度を付与（500ms間隔固定）</span>
+          </label>
+
+          <label class="switch">
+            <input id="wideOutput" name="wideOutput" type="checkbox" />
+            <span>医療機関別の届出横持ちCSVも作成</span>
           </label>
 
           <button id="submitButton" type="submit">CSVを作成</button>
