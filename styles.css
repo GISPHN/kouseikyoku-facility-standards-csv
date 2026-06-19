@@ -78,6 +78,13 @@ h2 {
   gap: 18px;
 }
 
+.help-text {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.94rem;
+  line-height: 1.7;
+}
+
 .dropzone {
   display: grid;
   place-items: center;
@@ -110,15 +117,7 @@ h2 {
   opacity: 0;
 }
 
-.options {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 16px 24px;
-}
-
-.switch,
-.number-field {
+.switch {
   display: inline-flex;
   align-items: center;
   gap: 10px;
@@ -130,15 +129,6 @@ h2 {
   width: 20px;
   height: 20px;
   accent-color: var(--accent);
-}
-
-.number-field input {
-  width: 96px;
-  min-height: 38px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 0 10px;
-  font: inherit;
 }
 
 button {
@@ -207,13 +197,7 @@ button:disabled {
     display: grid;
   }
 
-  button,
-  .number-field input {
+  button {
     width: 100%;
-  }
-
-  .options,
-  .number-field {
-    align-items: stretch;
   }
 }
