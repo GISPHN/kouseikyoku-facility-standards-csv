@@ -302,10 +302,18 @@ function normalizeAddressForQuery(prefecture, address) {
 
 function stripAddressDetailForQuery(address) {
   let value = address;
-  const floorPattern = "(?:地下|B|Ｂ)?[0-9０-９一二三四五六七八九十]+(?:階|[FfＦｆ]|フロア)";
-  const markerPattern = new RegExp(`^(.+[0-9０-９一二三四五六七八九十]+(?:丁目|丁|番地?|番|号|地先|-[0-9０-９]+)).*${floorPattern}.*$`, "u");
-  const markerMatch = markerPattern.exec(value);
-  if (markerMatch?.[1]) value = markerMatch[1];
+  const numberPattern = "[0-9０-９一二三四五六七八九十]+";
+  const addressMarker = `(?:${numberPattern}(?:丁目|丁)|${numberPattern}番地(?:${numberPattern})?|${numberPattern}番${numberPattern}(?:号)?|${numberPattern}番(?!地)|${numberPattern}号|${numberPattern}(?:-[0-9０-９]+)+|${numberPattern}地先)`;
+  const floorPattern = `(?:地下|B|Ｂ)?${numberPattern}(?:階|[FfＦｆ]|フロア)`;
+  const roomPattern = "[0-9０-９]+[A-Za-zＡ-Ｚａ-ｚ]?(?:号室|室|区画)";
+  const buildingPattern = "(?:ビル|ﾋﾞﾙ|マンション|タワー|モール|館|棟|センター|プラザ|ハイツ|メゾン|コーポ|アパート|BLDG|bldg|内)";
+  const detailPattern = `(?:${floorPattern}|${roomPattern}|${buildingPattern})`;
+  for (const detailMatch of value.matchAll(new RegExp(detailPattern, "giu"))) {
+    const beforeDetail = value.slice(0, detailMatch.index);
+    let lastMarker = null;
+    for (const match of beforeDetail.matchAll(new RegExp(addressMarker, "gu"))) lastMarker = match;
+    if (lastMarker) return beforeDetail.slice(0, lastMarker.index + lastMarker[0].length);
+  }
   return value.replace(new RegExp(`${floorPattern}.*$`, "u"), "");
 }
 
