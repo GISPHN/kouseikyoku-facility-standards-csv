@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>施設基準PDF CSV変換</title>
+    <title>施設基準Excel CSV変換</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
@@ -11,7 +11,7 @@
       <section class="panel">
         <div class="masthead">
           <div>
-            <p class="eyebrow">Browser-only PDF to CSV</p>
+            <p class="eyebrow">Kinki Kouseikyoku Excel to CSV</p>
             <h1>施設基準の届出受理状況をCSVへ変換</h1>
           </div>
           <a class="source-link" href="https://kouseikyoku.mhlw.go.jp/kinki/gyomu/gyomu/hoken_kikan/shitei_jokyo_00004.html" target="_blank" rel="noreferrer">公開元</a>
@@ -19,22 +19,15 @@
 
         <form id="convertForm" class="uploader">
           <label class="dropzone" for="pdfFile">
-            <span class="drop-title">PDFを選択</span>
-            <span id="fileName" class="drop-subtitle">厚生局公開の届出受理医療機関名簿PDF</span>
-            <input id="pdfFile" name="pdf" type="file" accept="application/pdf,.pdf" required />
+            <span class="drop-title">Excelを選択</span>
+            <span id="fileName" class="drop-subtitle">厚生局公開の施設基準Excel</span>
+            <input id="pdfFile" name="excel" type="file" accept=".xlsx,.xlsm,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" required />
           </label>
 
-          <div class="options">
-            <label class="switch">
-              <input id="geocode" name="geocode" type="checkbox" checked />
-              <span>国土地理院APIで緯度・経度を付与</span>
-            </label>
-            <label class="number-field">
-              <span>API間隔</span>
-              <input id="geocodeDelay" type="number" min="0" max="2000" step="50" value="120" />
-              <span>ms</span>
-            </label>
-          </div>
+          <label class="switch">
+            <input id="geocode" name="geocode" type="checkbox" checked />
+            <span>国土地理院APIで緯度・経度を付与（500ms間隔固定）</span>
+          </label>
 
           <button id="submitButton" type="submit">CSVを作成</button>
         </form>
@@ -49,9 +42,10 @@
           <span>法人名</span>
           <span>病院名</span>
           <span>住所</span>
+          <span>病床数</span>
           <span>届出項目</span>
           <span>受理番号</span>
-          <span>算定開始日</span>
+          <span>開始年月日</span>
           <span>緯度</span>
           <span>経度</span>
         </div>
